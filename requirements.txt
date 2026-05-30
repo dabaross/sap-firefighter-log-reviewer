@@ -1,0 +1,10 @@
+# Web layer (REST endpoint + serving the UI)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
+# Data validation (input/output models)
+pydantic>=2.6
+
+# Tests
+pytest>=8.0

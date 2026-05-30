@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+
+# Challenge dataset is NOT committed (it belongs to the challenge, not the repo).
+# Place it next to this repo or set DATASET_DIR; see README.
+dataset_candidate/
+
+# Local controller decisions written by the UI
+decisions.json

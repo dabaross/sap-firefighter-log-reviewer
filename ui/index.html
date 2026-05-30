@@ -1,12 +1,153 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8"/>
   <title>Firefighter Log Reviewer</title>
+  <style>
+    body { font-family: sans-serif; max-width: 860px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }
+    h1   { font-size: 1.4rem; color: #222; }
+    
+    .upload-box { background: white; border: 2px dashed #ccc; border-radius: 8px;
+                  padding: 30px; text-align: center; margin-bottom: 24px; }
+    .upload-box input { display: none; }
+    .upload-box label { cursor: pointer; color: #555; font-size: 0.95rem; }
+    .upload-box label:hover { color: #000; }
+
+    .verdict-box { padding: 16px 20px; border-radius: 8px; margin-bottom: 20px; font-size: 1.1rem; font-weight: bold; }
+    .PASS             { background: #d4edda; color: #155724; }
+    .REJECT           { background: #f8d7da; color: #721c24; }
+    .NEEDS_CORRECTION { background: #fff3cd; color: #856404; }
+
+    .finding { background: white; border-left: 4px solid #ccc; padding: 12px 16px;
+               margin-bottom: 10px; border-radius: 4px; font-size: 0.9rem; }
+    .finding.critical { border-color: #dc3545; }
+    .finding.high     { border-color: #fd7e14; }
+    .finding.medium   { border-color: #ffc107; }
+    .finding .rule    { font-weight: bold; margin-bottom: 4px; }
+    .finding .ev      { background: #f8f9fa; padding: 6px 8px; border-radius: 4px;
+                        font-family: monospace; font-size: 0.85rem; margin-top: 6px; }
+
+    .correction { background: white; border: 1px solid #dee2e6; border-radius: 8px;
+                  padding: 16px 20px; margin-bottom: 20px; }
+    .correction h3 { margin-top: 0; font-size: 1rem; }
+    .correction .rewrite { background: #f8f9fa; padding: 10px; border-radius: 4px;
+                           font-style: italic; margin-top: 8px; font-size: 0.9rem; }
+
+    .actions { display: flex; gap: 10px; margin-top: 8px; }
+    .btn { padding: 10px 22px; border: none; border-radius: 6px; cursor: pointer;
+           font-size: 0.95rem; font-weight: bold; }
+    .btn-pass      { background: #28a745; color: white; }
+    .btn-reject    { background: #dc3545; color: white; }
+    .btn-sendback  { background: #fd7e14; color: white; }
+    .btn:hover     { opacity: 0.85; }
+
+    .saved { background: #d4edda; color: #155724; padding: 10px 16px;
+             border-radius: 6px; margin-top: 12px; display: none; }
+    #result { display: none; }
+  </style>
 </head>
 <body>
-  <h1>Firefighter Log Compliance Reviewer</h1>
-  <!-- TODO: upload session JSON, show verdict + findings (highlighted),
-       suggested correction, and PASS / REJECT / SEND-BACK buttons. -->
+
+<h1>SAP Firefighter Log Compliance Reviewer</h1>
+
+<div class="upload-box">
+  <label for="fileInput">
+    Click to upload a session JSON file
+    <input type="file" id="fileInput" accept=".json"/>
+  </label>
+  <div id="filename" style="margin-top:10px;color:#888;font-size:0.85rem;"></div>
+</div>
+
+<div id="result">
+  <div id="verdictBox" class="verdict-box"></div>
+
+  <h2 style="font-size:1rem;margin-bottom:10px;">Findings</h2>
+  <div id="findings"></div>
+
+  <div id="correctionSection" class="correction" style="display:none;">
+    <h3>Suggested message to firefighter</h3>
+    <div id="correctionMsg"></div>
+    <div class="rewrite" id="correctionRewrite"></div>
+  </div>
+
+  <h2 style="font-size:1rem;margin:20px 0 10px;">Controller decision</h2>
+  <div class="actions">
+    <button class="btn btn-pass"     onclick="decide('PASS')">PASS</button>
+    <button class="btn btn-reject"   onclick="decide('REJECT')">REJECT</button>
+    <button class="btn btn-sendback" onclick="decide('SEND-BACK')">SEND BACK</button>
+  </div>
+  <div class="saved" id="savedMsg">Decision saved.</div>
+</div>
+
+<script>
+  let currentSessionId = null;
+
+  document.getElementById("fileInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    document.getElementById("filename").textContent = file.name;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const resp = await fetch("/review", { method: "POST", body: formData });
+    if (!resp.ok) {
+      alert("Error: " + (await resp.text()));
+      return;
+    }
+    const data = await resp.json();
+    renderResult(data);
+  });
+
+  function renderResult(data) {
+    currentSessionId = data.session_id;
+    document.getElementById("result").style.display = "block";
+    document.getElementById("savedMsg").style.display = "none";
+
+    // Verdict
+    const vb = document.getElementById("verdictBox");
+    const conf = Math.round(data.confidence * 100);
+    vb.className = "verdict-box " + data.verdict;
+    vb.textContent = `${data.session_id}  —  ${data.verdict}  (confidence: ${conf}%)`;
+
+    // Findings
+    const fc = document.getElementById("findings");
+    fc.innerHTML = "";
+    if (data.findings.length === 0) {
+      fc.innerHTML = "<p style='color:#555'>No issues detected.</p>";
+    }
+    for (const f of data.findings) {
+      fc.innerHTML += `
+        <div class="finding ${f.severity}">
+          <div class="rule">${f.rule_id} — ${f.severity.toUpperCase()} — ${f.description}</div>
+          <div class="ev">${f.evidence}</div>
+        </div>`;
+    }
+
+    // Correction
+    const cs = document.getElementById("correctionSection");
+    if (data.suggested_correction) {
+      cs.style.display = "block";
+      document.getElementById("correctionMsg").textContent =
+        data.suggested_correction.message_to_firefighter;
+      document.getElementById("correctionRewrite").textContent =
+        "Suggested rewrite: " + (data.suggested_correction.suggested_reason_rewrite || "—");
+    } else {
+      cs.style.display = "none";
+    }
+  }
+
+  async function decide(decision) {
+    if (!currentSessionId) return;
+    await fetch("/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: currentSessionId, decision })
+    });
+    const msg = document.getElementById("savedMsg");
+    msg.textContent = `Decision recorded: ${decision}`;
+    msg.style.display = "block";
+  }
+</script>
 </body>
 </html>

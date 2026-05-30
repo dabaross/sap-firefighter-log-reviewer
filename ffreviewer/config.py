@@ -1,54 +1,101 @@
-"""Tunable knobs and lookup tables for the rule engine.
+"""Tunable values for the rule engine — thresholds, lookup sets, mappings.
 
-Everything that is a *threshold* or a *list* lives here, separated from the
-detection logic in rules.py. This makes the rules readable and lets us
-calibrate against the train set without touching code logic.
+Everything that is a *number* or a *list of things* lives here, separated
+from the detection logic in rules.py. When a rule misbehaves we tweak here,
+not in the rule code.
 
-NOTE: the seed values below are starting points. We refine them by looking
-at the train sessions + labels (NEVER at the test set).
+Values are calibrated against the 50 training sessions + gold labels.
 """
 
-# --- Severity model -----------------------------------------------------
-# Numeric rank lets us compute "the most severe finding in a session".
+# ---------------------------------------------------------------------------
+# Severity ranking (used to find the "worst" finding and compute the verdict)
+# ---------------------------------------------------------------------------
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
-# --- Verdict thresholds (derived from train labels) ---------------------
-# 0 findings            -> PASS
-# max severity == medium -> NEEDS_CORRECTION
-# max severity >= high   -> REJECT
-# (See reviewer.verdict_from_findings.)
+# ---------------------------------------------------------------------------
+# R-001  Reason quality
+# ---------------------------------------------------------------------------
+# Calibration: all 14 R-001 training cases have reason length <= 42 chars.
+# All 20 PASS training cases have reason length >= 123 chars.
+# Threshold of 50 perfectly separates them with a safe margin.
+MIN_REASON_LENGTH = 50  
 
-# --- Business hours (for R-007) ----------------------------------------
-# Sessions outside this window AND without a genuine-emergency signal are
-# suspicious. UTC hours. TODO: confirm window against train data.
-BUSINESS_HOURS_START = 7   # 07:00 UTC
-BUSINESS_HOURS_END = 19    # 19:00 UTC
+#I calculated the 50-character threshold based on the training data. 
+# The longest case that should be flagged was 42 characters, 
+# while the shortest case that should not be flagged was 64 characters. I chose 50 as a safe middle ground.
 
-# --- R-001: generic / weak reason terms --------------------------------
-# TODO: build this list from real weak reasons in the train set.
-GENERIC_REASON_TERMS = {"test", "fix", "asap", "production issue"}
-MIN_REASON_LENGTH = 20
+# ---------------------------------------------------------------------------
+# R-007  Out-of-hours session
+# ---------------------------------------------------------------------------
+# UTC. Sessions starting outside [6, 20) are "after hours".
+BUSINESS_HOURS_START = 6   # 06:00 UTC
+BUSINESS_HOURS_END   = 20  # 20:00 UTC
 
-# --- tcode -> SAP module (for R-002 reason/action mismatch) -------------
-# TODO: fill from tcodes actually seen in the data.
-TCODE_MODULE = {
-    # "F110": "FI", "FB01": "FI", "SU01": "BASIS", ...
+# If ANY of these appear in the reason, R-007 does NOT fire.
+# These signal the firefighter had a legitimate, time-sensitive reason.
+# Calibrated from PASS sessions that started after midnight:
+#   "Resolved failed payment run F110 run ID ..."  -> "payment run"
+#   "System maintenance per INC..."                -> "maintenance"
+EMERGENCY_KEYWORDS = {"payment run", "maintenance", "monitoring", "alert"}
+
+# ---------------------------------------------------------------------------
+# R-002  Reason / action mismatch
+# ---------------------------------------------------------------------------
+# Words in reason suggesting read-only intent (no changes expected)
+READ_ONLY_INTENT_WORDS = {"check", "display", "view", "inspect", "verification", "verify"}
+
+# Words suggesting the reason scope is user/basis administration
+BASIS_CONTEXT_WORDS    = {"user lock", "user reset", "locked user", "user account"}
+
+# Financial/payment tcodes: if these appear when reason says "user admin", it's a mismatch
+FINANCIAL_TCODES = {"FB02", "FB01", "XK02", "XK05", "FK02", "F110", "F-53", "F-58"}
+
+# Words suggesting reason scope is FI-only
+FI_CONTEXT_WORDS = {"posting issue", "g/l account", "fi investigation", "general ledger"}
+
+# MM tcodes: if reason says "FI only" but one of these runs, it's a partial mismatch (medium)
+MM_TCODES = {"MIRO", "MIGO", "ME23N", "ME21N"}
+
+# ---------------------------------------------------------------------------
+# R-004  Direct table modification
+# ---------------------------------------------------------------------------
+# SE16N = table browser edit mode, SM30 = view maintenance, both bypass normal FI controls
+DIRECT_TABLE_TCODES = {"SE16N", "SM30"}
+
+# ---------------------------------------------------------------------------
+# R-006  Mass change
+# ---------------------------------------------------------------------------
+# Threshold: 99/98/114/124 changes on PASS sessions; 204/265 on REJECT.
+# Using 150 leaves a clear gap above all PASS cases (max 124).
+MASS_CHANGE_THRESHOLD = 150
+
+# If reason contains any of these, the large volume is expected / documented
+BULK_SCOPE_KEYWORDS = {
+    "cleanup", "mass", "bulk", "batch", "multiple", "several",
+    "all vendors", "eu vendors",
 }
 
-# --- Sensitive tables (for R-004 direct table edits) -------------------
-# TODO: confirm which tables appear in the data and matter.
-SENSITIVE_TABLES = {
-    # "T001", "LFA1", "LFBK", "USR02", ...
-}
+# ---------------------------------------------------------------------------
+# R-009  Session duration
+# ---------------------------------------------------------------------------
+# Threshold: 99/105/114 min on non-R009 sessions; 281/317/353 on R009 sessions.
+# Using 240 (4 hours) sits cleanly between the two groups.
+MAX_SESSION_MINUTES = 240
 
-# --- Segregation-of-Duties conflicting tcode pairs (for R-010) ----------
-# TODO: confirm from data; the brief gives vendor-maintenance + payment.
+# ---------------------------------------------------------------------------
+# R-010  Segregation of Duties (SoD) conflict
+# ---------------------------------------------------------------------------
+# Each tuple = (set A, set B). If tcodes touch both sets in one session = SoD violation.
+# Pattern from data: changing vendor bank details + running payment in same session.
 SOD_CONFLICT_PAIRS = [
-    # ("XK02", "F110"), ("FK02", "F110"), ...
+    ({"XK02", "FK02"}, {"F110", "F-53", "F-58"}),
 ]
 
-# --- R-006: mass-change threshold --------------------------------------
-MASS_CHANGE_THRESHOLD = 50  # TODO: calibrate on train
-
-# --- R-009: session duration limit -------------------------------------
-MAX_SESSION_MINUTES = 120   # TODO: calibrate on train
+# ---------------------------------------------------------------------------
+# R-011  High-risk bank data modification (additional rule — see README)
+# ---------------------------------------------------------------------------
+# LFBK table holds vendor bank accounts. BANKN = account number, IBAN = IBAN.
+# Changing these directly during a firefighter session is a prime BEC fraud vector.
+# In training data: LFBK changes appear ONLY on REJECT sessions — zero in PASS.
+BANK_DATA_TABLES = {"LFBK"}
+BANK_DATA_FIELDS = {"BANKN", "IBAN", "SWIFT", "BANKA"}

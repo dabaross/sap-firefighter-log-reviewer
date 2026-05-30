@@ -1,14 +1,11 @@
-"""Command-line entry point: review a single session file.
-
-Usage:
-    python cli.py path/to/session.json
-
-Prints the prediction as JSON to stdout.
-"""
+"""CLI: review a single session file and print the prediction as JSON."""
 
 import json
 import sys
 from pathlib import Path
+
+from ffreviewer.models import Session
+from ffreviewer.reviewer import review
 
 
 def main():
@@ -17,14 +14,14 @@ def main():
         sys.exit(1)
 
     path = Path(sys.argv[1])
+    if not path.exists():
+        print(f"File not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
     raw = json.loads(path.read_text(encoding="utf-8"))
-
-    # TODO: once models + reviewer are implemented:
-    # session = Session.model_validate(raw)
-    # prediction = review(session)
-    # print(json.dumps(prediction.model_dump(), indent=2, ensure_ascii=False))
-
-    print("CLI wired; reviewer not implemented yet.", file=sys.stderr)
+    session = Session.model_validate(raw)
+    prediction = review(session)
+    print(prediction.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

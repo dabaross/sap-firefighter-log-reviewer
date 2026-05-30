@@ -1,22 +1,18 @@
-"""Orchestrator: turn a session into a full prediction.
+"""Orchestrator: turns a validated Session into a complete Prediction."""
 
-review(session):
-    1. run_all_rules(session)        -> findings
-    2. verdict_from_findings(...)    -> PASS / NEEDS_CORRECTION / REJECT
-    3. if NEEDS_CORRECTION: draft a suggested_correction
-    4. return a Prediction
-"""
-
+from .models import Session, Prediction, Finding, SuggestedCorrection
+from .rules import run_all_rules
+from .corrections import build_correction
 from .config import SEVERITY_RANK
 
 
-def verdict_from_findings(findings):
-    """Map a list of findings to a verdict.
+def verdict_from_findings(findings: list[Finding]) -> str:
+    """Compute verdict from the worst severity found.
 
-    Rule derived from the train labels (holds for all 50 examples):
-        no findings            -> PASS
-        worst severity == medium -> NEEDS_CORRECTION
-        worst severity >= high   -> REJECT
+    Derived from train labels (holds for all 50 cases):
+      no findings              -> PASS
+      worst severity == medium -> NEEDS_CORRECTION
+      worst severity >= high   -> REJECT
     """
     if not findings:
         return "PASS"
@@ -26,4 +22,35 @@ def verdict_from_findings(findings):
     return "NEEDS_CORRECTION"
 
 
-# def review(session): ...   # we wire this once rules + models exist
+def confidence_from_verdict(verdict: str, findings: list[Finding]) -> float:
+    """Simple heuristic confidence score.
+
+    PASS with no findings = 1.0 (certain).
+    REJECT with a critical rule = 0.95 (rule-based, very reliable).
+    NEEDS_CORRECTION = 0.70 (borderline by definition).
+    """
+    if verdict == "PASS":
+        return 1.0
+    if verdict == "REJECT":
+        has_critical = any(f.severity == "critical" for f in findings)
+        return 0.95 if has_critical else 0.85
+    return 0.70  # NEEDS_CORRECTION
+
+
+def review(session: Session) -> Prediction:
+    """Full pipeline: session -> findings -> verdict -> prediction."""
+    findings = run_all_rules(session)
+    verdict = verdict_from_findings(findings)
+    confidence = confidence_from_verdict(verdict, findings)
+
+    correction = None
+    if verdict == "NEEDS_CORRECTION":
+        correction = build_correction(session, findings)
+
+    return Prediction(
+        session_id=session.session_id,
+        verdict=verdict,
+        confidence=confidence,
+        findings=findings,
+        suggested_correction=correction,
+    )

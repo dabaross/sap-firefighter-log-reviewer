@@ -46,6 +46,8 @@ Then open `http://127.0.0.1:8000` in the browser.
 python predict.py --sessions dataset_candidate/train/sessions --out predictions_train.jsonl
 python eval/eval.py --predictions predictions_train.jsonl --labels dataset_candidate/train/labels.jsonl
 ```
+Note: `eval/eval.py` is the reference evaluator provided by Seargin
+in the challenge package — committed as-is for reproducibility.
 
 ---
 

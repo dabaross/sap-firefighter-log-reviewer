@@ -1,10 +1,16 @@
-# Web layer (REST endpoint + serving the UI)
+# Web layer
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 
-# Data validation (input/output models)
+# Data validation
 pydantic>=2.6
+
+# Environment variables (.env file support)
+python-dotenv>=1.0
+
+# LLM corrections (optional — system falls back to templates without it)
+anthropic>=0.40
 
 # Tests
 pytest>=8.0

@@ -3,6 +3,9 @@
 import json
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from ffreviewer.models import Session
 from ffreviewer.reviewer import review

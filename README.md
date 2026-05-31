@@ -53,28 +53,19 @@ in the challenge package — committed as-is for reproducibility.
 
 ## Architecture
 
-```
-session.json
-     |
-     v
-[Pydantic validation]     rejects broken input at the door
-     |
-     v
-[Rule engine]             11 functions, one per rule
-     |
-     v
-[findings list]
-     |
-     |-- empty            --> PASS  (confidence 1.0)
-     |
-     |-- worst = medium   --> NEEDS_CORRECTION (confidence 0.70)
-     |                          |
-     |                          v
-     |                    [corrections.py]
-     |                    builds message to firefighter from templates
-     |
-     |-- worst >= high    --> REJECT (confidence 0.85-0.95)
-```
+![Architecture diagram](docs/Diagram.png)
+
+- **json** — one firefighter session log, uploaded by the controller.
+- **api.py** — FastAPI backend. Receives the file, serves the UI, and returns the prediction as JSON.
+- **models.py** — Pydantic models. Validate the input session and define the output shape. Bad input is rejected here before any logic runs.
+- **reviewer.py** — the orchestrator. Runs the rules, computes the verdict from the worst finding, and triggers a correction message when needed.
+- **rules.py** — 11 functions, each checks one type of violation. Returns a finding or nothing.
+- **config.py** — all thresholds and lookup lists (e.g. reason length, SoD tcode pairs). Separated from logic so rules can be tuned without touching code.
+- **corrections.py** — builds the message to the firefighter for NEEDS_CORRECTION sessions. Uses templates by default, or claude-haiku if an API key is set.
+- **UI** — single web page. Shows the verdict, findings and suggested correction, and lets the controller click PASS / REJECT / SEND-BACK.
+
+The verdict logic is simple and deterministic: no findings → PASS,
+worst finding medium → NEEDS_CORRECTION, any high or critical → REJECT.
 
 ### Why deterministic rules and not LLM for everything
 

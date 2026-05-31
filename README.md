@@ -179,6 +179,33 @@ a false positive. This is the weakest part of the system and the most
 obvious place to use an LLM call instead of keyword matching.
 
 ---
+## Where I disagree with the gold label
+
+In several REJECT sessions, the gold standard annotates only the primary
+violation (e.g. R-003 debug & replace) and ignores co-occurring issues
+like a short reason code (R-001) or an after-hours timestamp (R-007).
+
+I think this is incomplete rather than wrong. Take FF-TRAIN-0003:
+the session has a critical debug & replace violation, but the reason
+"Investigating posting issue per CHG0044434" is also genuinely too
+short — it does not specify what was investigated, what was found, or
+why debug mode was needed. A controller reviewing this session would
+want to flag both issues, not just the most severe one.
+
+Our system annotates everything it sees. This produces lower per-rule
+precision on R-001 and R-007 in sessions that are already REJECT, but
+I would argue the additional findings are useful to the controller
+rather than being noise. The verdict is always correct.
+
+The one case where I am less certain is R-010 on FF-TRAIN-0020 and
+FF-TRAIN-0038: the reason says "Reset user lock for HR consultant" but
+XK02 and F-53 appear in the transaction log. Gold labels this as R-002
+(reason mismatch) but not R-010 (SoD conflict). Our system fires both.
+Whether XK02 + F-53 constitutes a genuine SoD violation or was
+incidental to the user reset is ambiguous without more context —
+this is a case where a human controller should decide.
+
+---
 
 ## Cost
 

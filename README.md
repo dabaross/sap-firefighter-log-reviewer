@@ -1,56 +1,217 @@
 # SAP Firefighter Log Compliance Reviewer
 
-AI-assisted pre-screening of SAP GRC firefighter (emergency access) sessions.
-Given one session log, the system returns a verdict
-(`PASS` / `REJECT` / `NEEDS_CORRECTION`), a list of compliance findings, and —
-for borderline sessions — a drafted clarification message for the firefighter.
+Tool that automatically reviews SAP GRC firefighter (emergency access) session logs 
+and flags compliance issues before a human controller has to go through them manually.
 
-> Internship technical challenge submission. Built to be understood and
-> defended, not just to score.
+Built as a technical challenge for Seargin internship application.
 
-## Quick start
+---
+
+## What it does
+
+Takes a single session JSON file and returns:
+- **Verdict**: `PASS`, `REJECT`, or `NEEDS_CORRECTION`
+- **Findings**: list of specific issues found, with evidence from the log
+- **Suggested correction**: draft message to the firefighter (only for `NEEDS_CORRECTION`)
+
+---
+
+## Setup
 
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-source .venv/bin/activate
+.venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 ```
 
-Place the challenge dataset next to this repo as `dataset_candidate/`
-(it is intentionally not committed).
+Dataset goes in `dataset_candidate/` next to the repo (not committed).
 
-### Review one session
+---
+
+## How to run
+
+**Single session (CLI):**
 ```bash
 python cli.py dataset_candidate/train/sessions/FF-TRAIN-0001.json
 ```
 
-### Run on a whole set and evaluate
+**Controller UI:**
+```bash
+uvicorn api:app --reload
+```
+Then open `http://127.0.0.1:8000` in the browser.
+
+**Batch + eval:**
 ```bash
 python predict.py --sessions dataset_candidate/train/sessions --out predictions_train.jsonl
 python eval/eval.py --predictions predictions_train.jsonl --labels dataset_candidate/train/labels.jsonl
 ```
 
-### Controller UI
-```bash
-uvicorn api:app --reload
-# open http://127.0.0.1:8000
+---
+
+## Architecture
+
+```
+session.json
+     |
+     v
+[Pydantic validation]     rejects broken input at the door
+     |
+     v
+[Rule engine]             11 functions, one per rule
+     |
+     v
+[findings list]
+     |
+     |-- empty            --> PASS  (confidence 1.0)
+     |
+     |-- worst = medium   --> NEEDS_CORRECTION (confidence 0.70)
+     |                          |
+     |                          v
+     |                    [corrections.py]
+     |                    builds message to firefighter from templates
+     |
+     |-- worst >= high    --> REJECT (confidence 0.85-0.95)
 ```
 
-## How it works
+### Why deterministic rules and not LLM for everything
 
-`session JSON -> validate (Pydantic) -> rule engine -> findings -> verdict -> (correction)`
+After looking at the training data it became clear that the verdict
+can be computed directly from which rules fire — no case required
+any judgment call that only an LLM could make.
 
-- **Deterministic rules** do the detection and the verdict.
-- **Verdict logic:** no findings -> PASS; worst finding `medium` -> NEEDS_CORRECTION; any `high`/`critical` -> REJECT.
-- **Templates** draft the clarification message (no external API needed).
+Using an LLM to classify something that can be solved with explicit
+logic would add cost and make the results non-reproducible. The only
+place where a language model would actually help is writing the
+suggested_correction text — current version uses templates which
+work fine, but richer phrasing would be the natural next step.
 
-## TODO — filled during the build
-- [ ] Architecture diagram
-- [ ] Full rule catalog + rationale for added rules
-- [ ] Deterministic vs. LLM split and why
-- [ ] Known failure modes (>= 3 honest examples)
-- [ ] Cost estimate per session
-- [ ] What I would build next given another week
-- [ ] Hours log
-- [ ] (Optional) "Where I disagree with the gold label" appendix
+---
+
+## Rules
+
+### R-001 to R-010 (baseline)
+
+| Rule | What it checks | Severity |
+|------|----------------|----------|
+| R-001 | Reason shorter than 50 chars | medium |
+| R-002 | Reason scope does not match what was actually done | high |
+| R-003 | Value modified via ABAP debugger (/h replace) | critical |
+| R-004 | Direct table edit via SE16N or SM30 | high |
+| R-005 | OS-level command executed (SM49) | critical |
+| R-006 | Number of changes way exceeds what reason claims | high |
+| R-007 | After-hours session, no emergency in reason | medium |
+| R-008 | Firefighter and ticket requester are the same person | high |
+| R-009 | Session over 240 minutes with no re-justification | medium |
+| R-010 | Vendor master change + payment run in same session | critical |
+
+### R-011 (added)
+
+Direct modification of vendor bank account number or IBAN (table LFBK).
+
+I added this because changing a vendor's bank account and then running
+a payment is the classic pattern for redirecting money to a fraudulent
+account (BEC fraud). R-010 catches the tcode combination, but someone
+could theoretically use XK02 for something harmless and still run F110.
+R-011 checks whether the change_log actually shows BANKN or IBAN was
+touched — which is the real smoking gun. Every LFBK change in the
+training data appeared on a REJECT session, which confirmed this rule
+makes sense.
+
+### How thresholds were picked
+
+Everything was calibrated on the training set only — test set was
+not touched until predictions were final.
+
+- **R-001 threshold = 50 chars**: all R-001 cases in training had
+  reasons up to 42 chars. Shortest non-R-001 case had 64 chars. 50 sits
+  safely in the gap.
+- **R-006 threshold = 150 changes**: PASS sessions peaked at 124 changes,
+  REJECT R-006 cases started at 204. Clean gap.
+- **R-009 threshold = 240 min**: non-R-009 sessions peaked at 114 min,
+  R-009 sessions started at 281 min.
+- **XK05 removed from R-010**: initially had XK05 (block/unblock vendor)
+  in the SoD pair alongside XK02/FK02. This caused false alarms on
+  sessions where a firefighter legitimately unblocked a vendor and then
+  ran a payment run. XK05 is not a master-data change — removed it.
+
+---
+
+## Results on training set
+
+```
+Accuracy:  1.00
+Macro F1:  1.00
+
+PASS              P=1.000  R=1.000  F1=1.000  (n=20)
+REJECT            P=1.000  R=1.000  F1=1.000  (n=15)
+NEEDS_CORRECTION  P=1.000  R=1.000  F1=1.000  (n=15)
+```
+
+Per-rule precision is lower on R-001, R-010, R-011 because those rules
+sometimes fire alongside stronger violations on sessions that are already
+correctly classified REJECT. The gold standard only annotates the primary
+violation; the system annotates everything it sees. Verdict accuracy is
+not affected.
+
+---
+
+## Where the system gets it wrong
+
+**1. Co-firing inflates false positive count on per-rule metrics.**
+When a session has a critical violation (e.g. debug & replace), the system
+also flags smaller issues like a short reason code. Gold standard does not
+bother annotating the small stuff when there is already a critical finding.
+This is a noise problem for the controller — a suppression rule like
+"do not show medium findings when a critical one is present" would help.
+
+**2. R-010 fires on the tcode, not the actual change.**
+XK02 covers dozens of fields — changing a vendor's address is very
+different from changing their IBAN. Right now the rule fires whenever
+XK02 and F110 appear together regardless of what was actually changed.
+The fix would be to cross-check with change_log and only fire if a
+sensitive field (BANKN, IBAN) was actually modified.
+
+**3. R-002 depends on keywords, not meaning.**
+If a firefighter writes "unblocked supplier" instead of "unblocked vendor"
+the rule might miss it. And an unusual but legitimate reason could trigger
+a false positive. This is the weakest part of the system and the most
+obvious place to use an LLM call instead of keyword matching.
+
+---
+
+## Cost
+
+Zero — no LLM calls in the current version.
+
+If suggested_correction were generated by a small LLM (e.g. claude-haiku),
+rough estimate is around $0.001 per NEEDS_CORRECTION session. At 80
+sessions/month that is under $0.10/month.
+
+---
+
+## What I would build next
+
+1. LLM semantic check for R-002 — replace keyword lists with a single
+   call that compares reason intent vs actions taken
+2. Finding suppression — hide medium findings when a critical one is present
+3. R-010 field-level check — join with change_log to confirm BANKN/IBAN
+   was actually touched, not just XK02 executed
+4. Feedback loop — save controller decisions and review cases where the
+   system was overridden, use that to improve calibration over time
+
+---
+
+## Time spent
+
+| What | Hours |
+|------|-------|
+| Understanding the data and planning | ~1h |
+| Implementation (with AI assistance) | ~3h |
+| Learning and understanding the code | ~8h |
+| README and cover note | ~1h |
+| **Total** | **~13h** |
+
+Used Claude as a coding assistant throughout — per the challenge
+guidelines. Architecture decisions, threshold calibration, and
+debugging false positives were done by me.
